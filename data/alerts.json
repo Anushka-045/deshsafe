@@ -94,5 +94,10 @@
       "distance_km": 4.1,
       "address": "Saket, New Delhi"
     }
-  ]
+  ],
+  "statistics": {
+    "temperature_c": 42,
+    "aqi": 168,
+    "humidity_percent": 28
+  }
 }

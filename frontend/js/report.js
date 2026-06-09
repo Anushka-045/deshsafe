@@ -94,10 +94,36 @@ function submitReport() {
     const location = document.getElementById('incident-location')?.value.trim();
     const time = document.getElementById('incident-time')?.value;
 
-    if (!title || !desc || !location || !time) {
-        alert('Please fill in all required fields (Title, Description, Location, and Time).');
+    const error = document.getElementById('form-error');
+
+    const requiredFields = [
+        document.getElementById('incident-title'),
+        document.getElementById('incident-desc'),
+        document.getElementById('incident-location'),
+        document.getElementById('incident-time')
+    ];
+
+    requiredFields.forEach(field => {
+        if (field) {
+            field.style.borderColor = '';
+        }
+    });
+
+    let hasError = false;
+
+    requiredFields.forEach(field => {
+    if (field && !field.value.trim()) {
+        field.style.borderColor = 'var(--red)';
+        hasError = true;
+    }
+    });
+
+    if (hasError) {
+        error.style.display = 'block';
         return;
     }
+
+    error.style.display = 'none';
 
     const randomId = 'DS-' + Math.floor(1000 + Math.random() * 9000);
 

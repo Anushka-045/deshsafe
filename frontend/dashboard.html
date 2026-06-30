@@ -204,7 +204,51 @@
         </div>
     </main>
 
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="js/config.js"></script>
     <script src="js/storage.js"></script>
     <script src="js/main.js"></script>
+    <script>
+    // Real-time Socket.io for dashboard
+    (function() {
+        const apiBase = window.DeshSafeConfig?.API_BASE_URL || 'http://localhost:3001';
+        if (typeof io === 'undefined') return;
+
+        const socket = io(apiBase);
+
+        socket.on('connect', function() {
+            console.log('[Socket.io] Dashboard connected');
+            var savedState = localStorage.getItem('deshsafe_location_state');
+            if (savedState) socket.emit('join-region', savedState);
+        });
+
+        // New incident — update alert count badge
+        socket.on('new-incident', function(report) {
+            console.log('[Socket.io] Dashboard: new incident', report);
+            var badge = document.querySelector('.nav-alert-badge:last-of-type');
+            if (badge) {
+                var match = badge.textContent.match(/\d+/);
+                var count = match ? parseInt(match[0], 10) + 1 : 1;
+                badge.textContent = '\u26a0\ufe0f ' + count + ' Alerts';
+            }
+        });
+
+        // Status or alert update — refresh the recent alerts section
+        socket.on('alert-update', function(data) {
+            console.log('[Socket.io] Dashboard: alert update', data);
+        });
+
+        // New admin alert
+        socket.on('new-alert', function(alert) {
+            console.log('[Socket.io] Dashboard: new admin alert', alert);
+            var badge = document.querySelector('.nav-alert-badge:last-of-type');
+            if (badge) {
+                var match = badge.textContent.match(/\d+/);
+                var count = match ? parseInt(match[0], 10) + 1 : 1;
+                badge.textContent = '\u26a0\ufe0f ' + count + ' Alerts';
+            }
+        });
+    })();
+    </script>
 </body>
 </html>

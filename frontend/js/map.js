@@ -40,6 +40,9 @@ function addIncidentMarker(map, incident) {
         icon: getMarkerIcon(incident.severity)
     }).addTo(map);
 
+    // Store ID on marker for real-time update lookups
+    if (incident.id) marker._deshSafeId = incident.id;
+
     const severity = (incident.severity || 'unknown').toLowerCase();
     const typeLabel = (incident.type || 'incident').replace('_', ' ').toUpperCase();
     const statusText = (incident.status || 'active').toUpperCase();
@@ -287,8 +290,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             socket.on('connect', () => {
                 console.log('[Socket.io] Connected to backend events server');
+
+                // Join region room based on stored location
+                const savedState = localStorage.getItem('deshsafe_location_state');
+                if (savedState) {
+                    socket.emit('join-region', savedState);
+                    console.log('[Socket.io] Joined region room:', savedState);
+                }
             });
 
+            // New incident reported — add marker to map
             socket.on('new-incident', (report) => {
                 console.log('[Socket.io] Real-time incident received:', report);
 
@@ -338,6 +349,82 @@ document.addEventListener('DOMContentLoaded', async () => {
                             }
                         }
                     }
+                }
+            });
+
+            // Status update on an existing incident — update marker appearance
+            socket.on('alert-update', (data) => {
+                console.log('[Socket.io] Alert update received:', data);
+
+                if (data.type === 'alert') return; // handled by new-alert
+
+                // Find and update existing marker
+                const marker = activeMarkers.find(m => {
+                    if (!m._deshSafeId) return false;
+                    return m._deshSafeId === data._id;
+                });
+
+                if (marker) {
+                    // Update marker icon with new severity
+                    marker.setIcon(getMarkerIcon(data.severity));
+
+                    // Update popup content
+                    const severity = (data.severity || 'unknown').toLowerCase();
+                    const typeLabel = (data.type || 'incident').replace('_', ' ').toUpperCase();
+                    const statusText = (data.status || 'active').toUpperCase();
+                    const timeFormatted = data.updatedAt
+                        ? new Date(data.updatedAt).toLocaleString()
+                        : 'Just now';
+
+                    marker.setPopupContent(`
+                        <div style="font-family: inherit; min-width: 200px;">
+                            <strong style="display: block; font-size: 13.5px; color: var(--text-dark); margin-bottom: 4px;">
+                                ${typeLabel}: ${data.description ? data.description.substring(0, 30) + '...' : 'Report'}
+                            </strong>
+                            <span class="severity-badge ${severity}" style="margin-left: 0; margin-bottom: 6px;">${severity.toUpperCase()}</span>
+                            <p style="font-size: 12.5px; color: var(--text-mid); margin: 6px 0; line-height: 1.5;">
+                                ${data.description || 'No description provided.'}
+                            </p>
+                            <div style="font-size: 11px; margin-top: 8px; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px;">
+                                <span><i class="fa-solid fa-clock"></i> Updated: ${timeFormatted}</span>
+                                <span><i class="fa-solid fa-location-dot"></i> ${data.location ? (data.location.address || `${data.location.lat}, ${data.location.lng}`) : 'Unknown location'}</span>
+                                <span><i class="fa-solid fa-circle-info"></i> Status: <span class="status-${severity}" style="font-weight: 700; color: ${severityColors[severity] || 'gray'};">${statusText}</span></span>
+                            </div>
+                        </div>
+                    `);
+                }
+            });
+
+            // Admin created a new alert
+            socket.on('new-alert', (alert) => {
+                console.log('[Socket.io] New admin alert received:', alert);
+                if (alert.location && alert.location.lat != null && alert.location.lng != null) {
+                    const marker = addIncidentMarker(map, {
+                        id: alert._id,
+                        title: alert.title || 'Alert',
+                        type: alert.type || 'alert',
+                        description: alert.message || alert.description || '',
+                        location: alert.location || '',
+                        severity: alert.severity || 'medium',
+                        lat: alert.location.lat,
+                        lng: alert.location.lng,
+                        createdAt: alert.createdAt || new Date().toISOString(),
+                        status: 'verified'
+                    });
+                    if (marker) {
+                        activeMarkers.push(marker);
+                        marker.openPopup();
+                    }
+                }
+            });
+
+            // Alert deleted — remove marker from map
+            socket.on('alert-deleted', (data) => {
+                console.log('[Socket.io] Alert deleted:', data._id);
+                const index = activeMarkers.findIndex(m => m._deshSafeId === data._id);
+                if (index !== -1) {
+                    map.removeLayer(activeMarkers[index]);
+                    activeMarkers.splice(index, 1);
                 }
             });
         }

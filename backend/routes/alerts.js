@@ -7,6 +7,10 @@ const { verifyAdmin } = require('../middleware/auth');
 const router = express.Router();
 const COLLECTION = 'alerts';
 
+function getIO(req) {
+    return req.app.get('io');
+}
+
 // PUBLIC: active alerts
 router.get('/', async (req, res, next) => {
     try {
@@ -42,7 +46,15 @@ router.post('/', verifyAdmin, async (req, res, next) => {
         if (!validation.valid) return res.status(400).json({ errors: validation.errors });
         const doc = createAlert({ ...req.body, adminId: req.user.uid });
         const result = await getDB().collection(COLLECTION).insertOne(doc);
-        res.status(201).json({ _id: result.insertedId, ...doc });
+        const savedAlert = { _id: result.insertedId, ...doc };
+
+        // Emit new-alert event via Socket.io
+        const io = getIO(req);
+        if (io) {
+            io.emit('new-alert', savedAlert);
+        }
+
+        res.status(201).json(savedAlert);
     } catch (err) { next(err); }
 });
 
@@ -60,6 +72,21 @@ router.patch('/:id', verifyAdmin, async (req, res, next) => {
             { returnDocument: 'after' }
         );
         if (!result) return res.status(404).json({ error: 'Alert not found' });
+
+        // Emit alert-update event via Socket.io
+        const io = getIO(req);
+        if (io) {
+            io.emit('alert-update', {
+                _id: result._id,
+                type: 'alert',
+                title: result.title,
+                severity: result.severity,
+                active: result.active,
+                affectedStates: result.affectedStates,
+                updatedAt: result.updatedAt,
+            });
+        }
+
         res.json(result);
     } catch (err) {
         if (err.message.includes('ObjectId')) return res.status(400).json({ error: 'Invalid alert ID' });
@@ -73,6 +100,13 @@ router.delete('/:id', verifyAdmin, async (req, res, next) => {
         const result = await getDB().collection(COLLECTION)
             .deleteOne({ _id: new ObjectId(req.params.id) });
         if (result.deletedCount === 0) return res.status(404).json({ error: 'Alert not found' });
+
+        // Emit alert-deleted event via Socket.io
+        const io = getIO(req);
+        if (io) {
+            io.emit('alert-deleted', { _id: req.params.id });
+        }
+
         res.json({ message: 'Alert deleted successfully' });
     } catch (err) {
         if (err.message.includes('ObjectId')) return res.status(400).json({ error: 'Invalid alert ID' });

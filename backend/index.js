@@ -22,9 +22,36 @@ const io = new Server(server, {
 
 app.set('io', io);
 
+// Track connected clients and their regions
+const clientRegions = new Map();
+
 io.on('connection', (socket) => {
     console.log(`[Socket.io] Client connected: ${socket.id}`);
+
+    // Client joins a region room (e.g. "Delhi", "Maharashtra")
+    socket.on('join-region', (region) => {
+        if (typeof region === 'string' && region.trim()) {
+            const room = region.trim().toLowerCase();
+            socket.join(room);
+            clientRegions.set(socket.id, room);
+            console.log(`[Socket.io] ${socket.id} joined region: ${room}`);
+        }
+    });
+
+    // Client leaves current region and joins a new one
+    socket.on('switch-region', (newRegion) => {
+        const current = clientRegions.get(socket.id);
+        if (current) socket.leave(current);
+        if (typeof newRegion === 'string' && newRegion.trim()) {
+            const room = newRegion.trim().toLowerCase();
+            socket.join(room);
+            clientRegions.set(socket.id, room);
+            console.log(`[Socket.io] ${socket.id} switched to region: ${room}`);
+        }
+    });
+
     socket.on('disconnect', () => {
+        clientRegions.delete(socket.id);
         console.log(`[Socket.io] Client disconnected: ${socket.id}`);
     });
 });

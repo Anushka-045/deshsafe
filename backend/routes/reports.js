@@ -177,6 +177,12 @@ router.post('/', verifyToken, async (req, res, next) => {
         const io = req.app.get('io');
         if (io) {
             io.emit('new-incident', savedReport);
+
+            // Also emit to region room if state is available
+            const state = savedReport.location && savedReport.location.state;
+            if (state) {
+                io.to(state.trim().toLowerCase()).emit('new-incident', savedReport);
+            }
         }
 
         res.status(201).json(savedReport);
@@ -228,7 +234,13 @@ router.patch('/:id/status', verifyAdmin, async (req, res, next) => {
         if (!VALID.includes(status)) return res.status(400).json({ error: `status must be one of: ${VALID.join(', ')}` });
         
         let result;
+        let previousStatus = null;
         try {
+            // Capture previous status before update
+            const existing = await getDB().collection(COLLECTION)
+                .findOne({ _id: new ObjectId(req.params.id) });
+            previousStatus = existing ? existing.status : null;
+
             result = await getDB().collection(COLLECTION).findOneAndUpdate(
                 { _id: new ObjectId(req.params.id) },
                 { $set: { status, verifiedBy: req.user.uid, updatedAt: new Date() } },
@@ -237,6 +249,7 @@ router.patch('/:id/status', verifyAdmin, async (req, res, next) => {
         } catch (dbErr) {
             const index = FALLBACK_REPORTS.findIndex(r => r._id === req.params.id);
             if (index !== -1) {
+                previousStatus = FALLBACK_REPORTS[index].status;
                 FALLBACK_REPORTS[index].status = status;
                 FALLBACK_REPORTS[index].updatedAt = new Date();
                 result = FALLBACK_REPORTS[index];
@@ -245,10 +258,35 @@ router.patch('/:id/status', verifyAdmin, async (req, res, next) => {
         
         if (!result) return res.status(404).json({ error: 'Report not found' });
 
-        // Emit new-incident event via Socket.io if verified or resolved
+        // Emit alert-update event via Socket.io for all status changes
         const io = req.app.get('io');
-        if (io && ['verified', 'resolved'].includes(status)) {
-            io.emit('new-incident', result);
+        if (io) {
+            const payload = {
+                _id: result._id,
+                type: result.type,
+                severity: result.severity,
+                status: result.status,
+                previousStatus,
+                location: result.location,
+                description: result.description,
+                updatedAt: result.updatedAt,
+            };
+            io.emit('alert-update', payload);
+
+            // Also emit new-incident for verified/resolved so map adds marker
+            if (['verified', 'resolved'].includes(status)) {
+                io.emit('new-incident', result);
+            }
+
+            // Emit to region room if state is available
+            const state = result.location && result.location.state;
+            if (state) {
+                const room = state.trim().toLowerCase();
+                io.to(room).emit('alert-update', payload);
+                if (['verified', 'resolved'].includes(status)) {
+                    io.to(room).emit('new-incident', result);
+                }
+            }
         }
 
         res.json(result);

@@ -3,6 +3,7 @@ const { ObjectId } = require('mongodb');
 const { getDB } = require('../db');
 const { createAlert, validateAlert } = require('../models/Alert');
 const { verifyAdmin } = require('../middleware/auth');
+const { distanceKm, parseNearbyQuery } = require('../utils/geo');
 
 const router = express.Router();
 const COLLECTION = 'alerts';
@@ -10,6 +11,30 @@ const COLLECTION = 'alerts';
 function getIO(req) {
     return req.app.get('io');
 }
+// PUBLIC: geo-targeted alerts near a location
+router.get('/nearby', async (req, res, next) => {
+    try {
+        const { latitude, longitude, radius } = parseNearbyQuery(req.query);
+        const filter = {
+            active: true,
+            lat: { $ne: null },
+            lng: { $ne: null },
+            $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }]
+        };
+        const candidates = await getDB().collection(COLLECTION)
+            .find(filter).sort({ createdAt: -1 }).toArray();
+
+        const nearby = candidates
+            .map(alert => ({
+                ...alert,
+                distanceKm: Math.round(distanceKm(latitude, longitude, alert.lat, alert.lng) * 10) / 10
+            }))
+            .filter(alert => alert.distanceKm <= radius)
+            .sort((a, b) => a.distanceKm - b.distanceKm);
+
+        res.json({ total: nearby.length, radiusKm: radius, alerts: nearby });
+    } catch (err) { next(err); }
+});
 
 // PUBLIC: active alerts
 router.get('/', async (req, res, next) => {
@@ -61,7 +86,7 @@ router.post('/', verifyAdmin, async (req, res, next) => {
 // ADMIN: update alert
 router.patch('/:id', verifyAdmin, async (req, res, next) => {
     try {
-        const allowed = ['title','message','severity','affectedStates','active','expiresAt'];
+        const allowed = ['title','message','severity','affectedStates','active','expiresAt','lat','lng','radiusKm'];
         const updates = { updatedAt: new Date() };
         for (const key of allowed) {
             if (req.body[key] !== undefined) updates[key] = req.body[key];

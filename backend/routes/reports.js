@@ -3,6 +3,7 @@ const { ObjectId } = require('mongodb');
 const { getDB } = require('../db');
 const { createReport, validateReport } = require('../models/Report');
 const { verifyToken, verifyAdmin } = require('../middleware/auth');
+const { distanceKm, parseNearbyQuery } = require('../utils/geo');
 
 const router = express.Router();
 const COLLECTION = 'reports';
@@ -48,6 +49,45 @@ const FALLBACK_REPORTS = [
         status: 'resolved'
     }
 ];
+// PUBLIC: reports near a location (radius search)
+router.get('/nearby', async (req, res, next) => {
+    try {
+        const { latitude, longitude, radius } = parseNearbyQuery(req.query);
+        const { status } = req.query;
+        const VALID_STATUSES = ['pending', 'verified', 'rejected', 'resolved'];
+
+        let pool;
+        try {
+            const filter = {};
+            if (status === 'all') {
+                // no status filter
+            } else if (status && VALID_STATUSES.includes(status)) {
+                filter.status = status;
+            } else {
+                filter.status = { $in: ['verified', 'resolved'] };
+            }
+            pool = await getDB().collection(COLLECTION).find(filter).toArray();
+        } catch (dbErr) {
+            pool = [...FALLBACK_REPORTS];
+            if (status && status !== 'all' && VALID_STATUSES.includes(status)) {
+                pool = pool.filter(r => r.status === status);
+            } else if (status !== 'all') {
+                pool = pool.filter(r => ['verified', 'resolved'].includes(r.status));
+            }
+        }
+
+        const nearby = pool
+            .filter(r => r.location && typeof r.location.lat === 'number' && typeof r.location.lng === 'number')
+            .map(r => ({
+                ...r,
+                distanceKm: Math.round(distanceKm(latitude, longitude, r.location.lat, r.location.lng) * 10) / 10
+            }))
+            .filter(r => r.distanceKm <= radius)
+            .sort((a, b) => a.distanceKm - b.distanceKm);
+
+        res.json({ total: nearby.length, radiusKm: radius, reports: nearby });
+    } catch (err) { next(err); }
+});
 
 // PUBLIC: list verified reports
 router.get('/', async (req, res, next) => {

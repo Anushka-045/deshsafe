@@ -1,6 +1,6 @@
 const express = require('express');
 const { getDB } = require('../db');
-const { getCurrentWeather, evaluateSeverity } = require('../services/weatherService');
+const { getCurrentWeather, evaluateSeverity, getAirQuality, getUVIndex, formatSunrise } = require('../services/weatherService');
 const { createAlert } = require('../models/Alert');
 const { verifyAdmin } = require('../middleware/auth');
 
@@ -20,7 +20,7 @@ function getIO(req) {
     return req.app.get('io');
 }
 
-// PUBLIC: current weather + auto-evaluated hazard severity for a location
+// PUBLIC: current weather (+ AQI, UV index, sunrise) + auto-evaluated hazard severity for a location
 router.get('/current', async (req, res, next) => {
     try {
         const { lat, lng } = req.query;
@@ -30,9 +30,21 @@ router.get('/current', async (req, res, next) => {
         if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
             return res.status(400).json({ error: 'Coordinates out of valid range' });
         }
-        const weather = await getCurrentWeather(latitude, longitude);
+
+        const [weather, airQuality, uvIndex] = await Promise.all([
+            getCurrentWeather(latitude, longitude),
+            getAirQuality(latitude, longitude),
+            getUVIndex(latitude, longitude),
+        ]);
+
+        const sunrise = formatSunrise(weather.sunriseUnix, weather.timezoneOffsetSec);
         const severityInfo = evaluateSeverity(weather);
-        res.json({ weather, severeConditionDetected: !!severityInfo, severity: severityInfo });
+
+        res.json({
+            weather: { ...weather, sunrise, airQuality, uvIndex },
+            severeConditionDetected: !!severityInfo,
+            severity: severityInfo,
+        });
     } catch (err) { next(err); }
 });
 

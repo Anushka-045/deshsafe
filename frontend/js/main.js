@@ -423,7 +423,7 @@ window.DeshSafe = {
             if (!res.ok) return null;
             const data = await res.json();
             const w = data.weather;
-            return {
+            const result = {
                 temperature_c: Math.round(w.tempC),
                 feels_like_c: Math.round(w.feelsLikeC),
                 humidity_percent: w.humidity,
@@ -432,6 +432,13 @@ window.DeshSafe = {
                 severeConditionDetected: data.severeConditionDetected,
                 severity: data.severity
             };
+            if (w.sunrise) result.sunrise = w.sunrise;
+            if (w.airQuality) {
+                result.aqi = w.airQuality.aqiIndex;
+                result.aqi_label = w.airQuality.aqiLabel;
+            }
+            if (typeof w.uvIndex === 'number') result.uv_index = w.uvIndex;
+            return result;
         } catch (e) {
             console.warn('Could not fetch live weather:', e);
             return null;

@@ -1,4 +1,8 @@
 const BASE_URL = 'https://api.openweathermap.org/data/2.5/weather';
+const AIR_POLLUTION_URL = 'https://api.openweathermap.org/data/2.5/air_pollution';
+const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
+
+const AQI_LABELS = { 1: 'Good', 2: 'Fair', 3: 'Moderate', 4: 'Poor', 5: 'Very Poor' };
 
 async function getCurrentWeather(lat, lng) {
     const apiKey = process.env.OPENWEATHER_API_KEY;
@@ -25,7 +29,63 @@ async function getCurrentWeather(lat, lng) {
         windSpeedMs: data.wind?.speed ?? null,
         visibilityM: data.visibility ?? null,
         rain1hMm: data.rain?.['1h'] ?? 0,
+        sunriseUnix: data.sys?.sunrise ?? null,
+        timezoneOffsetSec: data.timezone ?? 0,
     };
+}
+
+// Free tier: OpenWeatherMap Air Pollution API, same key as current weather.
+// Returns their 1-5 scale (not the 0-500 US EPA scale) — display as label + index.
+async function getAirQuality(lat, lng) {
+    const apiKey = process.env.OPENWEATHER_API_KEY;
+    if (!apiKey) return null;
+    try {
+        const url = `${AIR_POLLUTION_URL}?lat=${lat}&lon=${lng}&appid=${apiKey}`;
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const data = await response.json();
+        const aqiIndex = data.list?.[0]?.main?.aqi ?? null;
+        if (aqiIndex == null) return null;
+        return {
+            aqiIndex,
+            aqiLabel: AQI_LABELS[aqiIndex] || 'Unknown',
+            components: data.list?.[0]?.components ?? null,
+        };
+    } catch (e) {
+        console.warn('[weatherService] Air quality fetch failed:', e.message);
+        return null;
+    }
+}
+
+// Free tier: Open-Meteo, no API key required.
+async function getUVIndex(lat, lng) {
+    try {
+        const url = `${OPEN_METEO_URL}?latitude=${lat}&longitude=${lng}&current=uv_index`;
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const data = await response.json();
+        const uv = data.current?.uv_index;
+        return typeof uv === 'number' ? uv : null;
+    } catch (e) {
+        console.warn('[weatherService] UV index fetch failed:', e.message);
+        return null;
+    }
+}
+
+// Formats a UTC sunrise timestamp into a local "H:MMam/pm" string using the
+// location's own UTC offset (not the server's), so it reads correctly regardless
+// of where the backend is hosted.
+function formatSunrise(sunriseUnix, timezoneOffsetSec) {
+    if (sunriseUnix == null) return null;
+    const localMs = (sunriseUnix + (timezoneOffsetSec || 0)) * 1000;
+    const d = new Date(localMs);
+    let hours = d.getUTCHours();
+    const minutes = d.getUTCMinutes();
+    const ampm = hours >= 12 ? 'pm' : 'am';
+    hours = hours % 12;
+    if (hours === 0) hours = 12;
+    const minutesStr = minutes < 10 ? `0${minutes}` : `${minutes}`;
+    return `${hours}:${minutesStr}${ampm}`;
 }
 
 /**
@@ -103,4 +163,4 @@ function evaluateSeverity(weather) {
     return null;
 }
 
-module.exports = { getCurrentWeather, evaluateSeverity };
+module.exports = { getCurrentWeather, evaluateSeverity, getAirQuality, getUVIndex, formatSunrise };

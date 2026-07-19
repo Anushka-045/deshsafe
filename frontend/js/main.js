@@ -135,6 +135,8 @@ async function detectAndSetLocation() {
             const locationStr = `${data.city}, ${data.region}`;
             localStorage.setItem('deshsafe_location', locationStr);
             localStorage.setItem('deshsafe_location_time', Date.now().toString());
+            if (data.latitude) localStorage.setItem('deshsafe_lat', data.latitude);
+            if (data.longitude) localStorage.setItem('deshsafe_lng', data.longitude);
             _updateLocationUI(locationStr);
             if (document.getElementById('greeting-date')) updateDate();
             return locationStr;
@@ -411,6 +413,31 @@ window.DeshSafe = {
         };
     },
 
+    async fetchLiveWeather() {
+        const lat = localStorage.getItem('deshsafe_lat');
+        const lng = localStorage.getItem('deshsafe_lng');
+        if (!lat || !lng) return null;
+        const apiBase = window.DeshSafeConfig?.API_BASE_URL || 'http://localhost:3001';
+        try {
+            const res = await this._withTimeout(fetch(`${apiBase}/api/weather/current?lat=${lat}&lng=${lng}`), 4000);
+            if (!res.ok) return null;
+            const data = await res.json();
+            const w = data.weather;
+            return {
+                temperature_c: Math.round(w.tempC),
+                feels_like_c: Math.round(w.feelsLikeC),
+                humidity_percent: w.humidity,
+                wind_kmh: Math.round((w.windSpeedMs || 0) * 3.6),
+                condition: w.description ? w.description.replace(/\b\w/g, c => c.toUpperCase()) : w.condition,
+                severeConditionDetected: data.severeConditionDetected,
+                severity: data.severity
+            };
+        } catch (e) {
+            console.warn('Could not fetch live weather:', e);
+            return null;
+        }
+    },
+
     syncUIWithProfile(profile) {
         const initials = getInitials(profile.name);
 
@@ -484,7 +511,8 @@ window.DeshSafe = {
     async initializeDashboard() {
         const profile = await this.getProfile();
         const data = await this.fetchAlertsAndWeather();
-        const weather = data.weather;
+        const liveWeather = await this.fetchLiveWeather();
+        const weather = liveWeather ? { ...data.weather, ...liveWeather } : data.weather;
 
         // FIX: update alert count in greeting dynamically
         const alertCountEl = document.getElementById('alert-count');

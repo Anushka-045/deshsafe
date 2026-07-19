@@ -4,7 +4,7 @@ const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const { connectDB } = require('./db');
-
+const weatherRoutes = require('./routes/weather');
 // Routes
 const geocodeRoutes = require('./routes/geocode');
 const reportRoutes  = require('./routes/reports');
@@ -71,6 +71,7 @@ app.use('/api', geocodeRoutes);          // /api/geocode, /api/reverse-geocode
 app.use('/api/reports', reportRoutes);   // /api/reports
 app.use('/api/alerts', alertRoutes);     // /api/alerts
 app.use('/api/users', userRoutes);       // /api/users
+app.use('/api/weather', weatherRoutes);  // /api/weather/current, /api/weather/check-and-alert
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use((err, _req, res, _next) => {
@@ -90,6 +91,8 @@ async function start() {
         console.log(`  GET  /api/alerts`);
         console.log(`  POST /api/alerts        (admin only)`);
         console.log(`  GET  /api/users/me      (auth required)`);
+        console.log(`  GET  /api/weather/current`);
+        console.log(`  POST /api/weather/check-and-alert (admin only)`); 
     });
 }
 

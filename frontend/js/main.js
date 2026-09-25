@@ -115,18 +115,55 @@ function getInitials(name) {
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-// ── Auto Location Detection (IP-based) ──
+// ── Auto Location Detection (High-Precision GPS + IP Fallback) ──
 async function detectAndSetLocation() {
     const cached = localStorage.getItem('deshsafe_location');
     const cachedTime = localStorage.getItem('deshsafe_location_time');
-    const ONE_HOUR = 60 * 60 * 1000;
+    const THIRTY_MINS = 30 * 60 * 1000;
 
-    if (cached && cachedTime && (Date.now() - parseInt(cachedTime)) < ONE_HOUR) {
+    if (cached && cachedTime && (Date.now() - parseInt(cachedTime)) < THIRTY_MINS && cached !== 'India' && cached !== 'Gurgaon, Haryana') {
         _updateLocationUI(cached);
         if (document.getElementById('greeting-date')) updateDate();
         return cached;
     }
 
+    // 1. Try High-Precision Browser GPS Geolocation first
+    if (navigator.geolocation) {
+        try {
+            const position = await new Promise((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(resolve, reject, {
+                    enableHighAccuracy: true,
+                    timeout: 6000,
+                    maximumAge: 0
+                });
+            });
+
+            const { latitude, longitude } = position.coords;
+            localStorage.setItem('deshsafe_lat', latitude.toString());
+            localStorage.setItem('deshsafe_lng', longitude.toString());
+
+            // Reverse geocode GPS coordinates for exact neighborhood / city
+            const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`);
+            if (geoRes.ok) {
+                const geoData = await geoRes.json();
+                const addr = geoData.address || {};
+                const suburb = addr.suburb || addr.neighbourhood || addr.residential || addr.subdistrict || addr.district || addr.city_district;
+                const city = addr.city || addr.town || addr.state_district || addr.state || 'Delhi';
+                
+                const locationStr = suburb ? `${suburb}, ${city}` : (geoData.display_name ? geoData.display_name.split(',').slice(0, 2).join(',') : `${city}, India`);
+                
+                localStorage.setItem('deshsafe_location', locationStr);
+                localStorage.setItem('deshsafe_location_time', Date.now().toString());
+                _updateLocationUI(locationStr);
+                if (document.getElementById('greeting-date')) updateDate();
+                return locationStr;
+            }
+        } catch (gpsErr) {
+            console.warn('[Location] GPS lookup skipped/failed, falling back to IP:', gpsErr.message);
+        }
+    }
+
+    // 2. IP-based lookup fallback if GPS unavailable
     try {
         const res = await fetch('https://ipapi.co/json/');
         const data = await res.json();
@@ -142,11 +179,11 @@ async function detectAndSetLocation() {
             return locationStr;
         }
     } catch (e) {
-        console.warn('Could not detect location:', e);
+        console.warn('Could not detect location via IP:', e);
     }
 
-    _updateLocationUI('India');
-    return 'India';
+    _updateLocationUI('Delhi, India');
+    return 'Delhi, India';
 }
 
 function _updateLocationUI(locationStr) {

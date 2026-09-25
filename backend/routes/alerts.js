@@ -8,9 +8,19 @@ const { distanceKm, parseNearbyQuery } = require('../utils/geo');
 const router = express.Router();
 const COLLECTION = 'alerts';
 
+const { fetchLiveGovernmentAlerts } = require('../services/gdacsService');
+
 function getIO(req) {
     return req.app.get('io');
 }
+
+// PUBLIC: Fetch official live government & international disaster alerts (GDACS / NDMA)
+router.get('/live-government', async (req, res, next) => {
+    try {
+        const alerts = await fetchLiveGovernmentAlerts();
+        res.json({ total: alerts.length, source: 'GDACS & NDMA Official Feed', alerts });
+    } catch (err) { next(err); }
+});
 // PUBLIC: geo-targeted alerts near a location
 router.get('/nearby', async (req, res, next) => {
     try {

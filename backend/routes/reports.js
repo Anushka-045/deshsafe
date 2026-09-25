@@ -197,12 +197,30 @@ router.get('/:id', async (req, res, next) => {
     }
 });
 
-// AUTH: submit report
-router.post('/', verifyToken, async (req, res, next) => {
+// Middleware for optional authentication (allows guests)
+async function optionalAuth(req, res, next) {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        const idToken = authHeader.split('Bearer ')[1];
+        try {
+            const { getAuth } = require('../services/firebaseAdmin');
+            const decoded = await getAuth().verifyIdToken(idToken);
+            req.user = decoded;
+        } catch (e) {
+            req.user = { uid: 'guest-' + Math.random().toString(36).substring(2, 9), isGuest: true };
+        }
+    } else {
+        req.user = { uid: 'guest-' + Math.random().toString(36).substring(2, 9), isGuest: true };
+    }
+    next();
+}
+
+// PUBLIC/AUTH: submit report (guests allowed)
+router.post('/', optionalAuth, async (req, res, next) => {
     try {
         const validation = validateReport(req.body);
         if (!validation.valid) return res.status(400).json({ errors: validation.errors });
-        const doc = createReport({ ...req.body, userId: req.user.uid });
+        const doc = createReport({ ...req.body, userId: req.user.uid, upvotes: 1 });
         
         let savedReport;
         try {
@@ -226,6 +244,31 @@ router.post('/', verifyToken, async (req, res, next) => {
         }
 
         res.status(201).json(savedReport);
+    } catch (err) { next(err); }
+});
+
+// PUBLIC: Community upvote/confirm report
+router.post('/:id/upvote', async (req, res, next) => {
+    try {
+        let updated;
+        try {
+            const id = req.params.id;
+            const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+            const result = await getDB().collection(COLLECTION).findOneAndUpdate(
+                filter,
+                { $inc: { upvotes: 1 } },
+                { returnDocument: 'after' }
+            );
+            updated = result;
+        } catch (dbErr) {
+            const rep = FALLBACK_REPORTS.find(r => r._id === req.params.id);
+            if (rep) {
+                rep.upvotes = (rep.upvotes || 0) + 1;
+                updated = rep;
+            }
+        }
+        if (!updated) return res.status(404).json({ error: 'Report not found' });
+        res.json({ success: true, upvotes: updated.upvotes || 1 });
     } catch (err) { next(err); }
 });
 

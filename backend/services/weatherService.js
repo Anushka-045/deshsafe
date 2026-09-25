@@ -6,31 +6,62 @@ const AQI_LABELS = { 1: 'Good', 2: 'Fair', 3: 'Moderate', 4: 'Poor', 5: 'Very Po
 
 async function getCurrentWeather(lat, lng) {
     const apiKey = process.env.OPENWEATHER_API_KEY;
-    if (!apiKey) {
-        const err = new Error('OPENWEATHER_API_KEY is not configured');
-        err.status = 500;
-        throw err;
+    if (apiKey) {
+        try {
+            const url = `${BASE_URL}?lat=${lat}&lon=${lng}&appid=${apiKey}&units=metric`;
+            const response = await fetch(url);
+            if (response.ok) {
+                const data = await response.json();
+                return {
+                    location: data.name || null,
+                    condition: data.weather?.[0]?.main || null,
+                    description: data.weather?.[0]?.description || null,
+                    tempC: data.main?.temp ?? null,
+                    feelsLikeC: data.main?.feels_like ?? null,
+                    humidity: data.main?.humidity ?? null,
+                    windSpeedMs: data.wind?.speed ?? null,
+                    visibilityM: data.visibility ?? null,
+                    rain1hMm: data.rain?.['1h'] ?? 0,
+                    sunriseUnix: data.sys?.sunrise ?? null,
+                    timezoneOffsetSec: data.timezone ?? 0,
+                };
+            }
+        } catch (e) {
+            console.warn('[weatherService] OpenWeather fetch failed, trying Open-Meteo fallback:', e.message);
+        }
     }
-    const url = `${BASE_URL}?lat=${lat}&lon=${lng}&appid=${apiKey}&units=metric`;
-    const response = await fetch(url);
-    const data = await response.json();
+
+    // Open-Meteo 100% Free Fallback (No API key required)
+    const omUrl = `${OPEN_METEO_URL}?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,apparent_temperature,rain,weather_code,wind_speed_10m&daily=sunrise,sunset&timezone=auto`;
+    const response = await fetch(omUrl);
     if (!response.ok) {
-        const err = new Error(data.message || 'Failed to fetch weather data');
-        err.status = response.status === 401 ? 502 : response.status;
-        throw err;
+        throw new Error('Failed to fetch weather from Open-Meteo fallback');
     }
+    const data = await response.json();
+    const cur = data.current || {};
+    
+    // Map weather code to text
+    const code = cur.weather_code || 0;
+    let condition = 'Clear';
+    let description = 'Clear sky';
+    if (code >= 1 && code <= 3) { condition = 'Clouds'; description = 'Partly cloudy'; }
+    else if (code >= 45 && code <= 48) { condition = 'Fog'; description = 'Foggy conditions'; }
+    else if (code >= 51 && code <= 67) { condition = 'Rain'; description = 'Rain showers'; }
+    else if (code >= 80 && code <= 82) { condition = 'Rain'; description = 'Heavy rain showers'; }
+    else if (code >= 95) { condition = 'Thunderstorm'; description = 'Thunderstorm'; }
+
     return {
-        location: data.name || null,
-        condition: data.weather?.[0]?.main || null,
-        description: data.weather?.[0]?.description || null,
-        tempC: data.main?.temp ?? null,
-        feelsLikeC: data.main?.feels_like ?? null,
-        humidity: data.main?.humidity ?? null,
-        windSpeedMs: data.wind?.speed ?? null,
-        visibilityM: data.visibility ?? null,
-        rain1hMm: data.rain?.['1h'] ?? 0,
-        sunriseUnix: data.sys?.sunrise ?? null,
-        timezoneOffsetSec: data.timezone ?? 0,
+        location: 'Detected Location',
+        condition,
+        description,
+        tempC: Math.round(cur.temperature_2m ?? 28),
+        feelsLikeC: Math.round(cur.apparent_temperature ?? cur.temperature_2m ?? 28),
+        humidity: Math.round(cur.relative_humidity_2m ?? 50),
+        windSpeedMs: Math.round((cur.wind_speed_10m ?? 10) / 3.6), // convert km/h to m/s
+        visibilityM: 10000,
+        rain1hMm: cur.rain ?? 0,
+        sunriseUnix: null,
+        timezoneOffsetSec: 19800
     };
 }
 

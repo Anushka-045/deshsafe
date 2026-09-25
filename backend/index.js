@@ -67,11 +67,14 @@ app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', service: 'deshsafe-api', timestamp: new Date() });
 });
 
+const routingRoutes = require('./routes/routing');
+
 app.use('/api', geocodeRoutes);          // /api/geocode, /api/reverse-geocode
 app.use('/api/reports', reportRoutes);   // /api/reports
 app.use('/api/alerts', alertRoutes);     // /api/alerts
 app.use('/api/users', userRoutes);       // /api/users
 app.use('/api/weather', weatherRoutes);  // /api/weather/current, /api/weather/check-and-alert
+app.use('/api/routing', routingRoutes);  // /api/routing/evacuation
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use((err, _req, res, _next) => {

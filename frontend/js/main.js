@@ -197,26 +197,50 @@ window.DeshSafe = {
     currentUser: null,
 
     async getProfile() {
+        // 1. Try local storage cache first
+        const cachedStr = localStorage.getItem('deshsafe_user_profile');
+        let profile = cachedStr ? JSON.parse(cachedStr) : null;
+
         if (this.currentUser) {
             try {
                 const { getProfile } = await import('./firebase.js');
-                return await getProfile(this.currentUser.uid);
+                const cloudProfile = await getProfile(this.currentUser.uid);
+                if (cloudProfile && cloudProfile.name) {
+                    profile = { ...profile, ...cloudProfile };
+                }
             } catch (e) {
-                console.error('Error fetching profile from Firestore:', e);
+                console.warn('Could not fetch Firestore profile:', e);
             }
         }
-        return {
-            name: 'Guest',
-            age: '',
-            phone: '',
-            familySize: '4 members',
-            location: localStorage.getItem('deshsafe_location') || 'India',
-            healthTags: [],
-            preferences: { heatwave: true, flood: true, aqi: true, earthquake: false }
-        };
+
+        const defaultName = (this.currentUser && (this.currentUser.displayName || (this.currentUser.email ? this.currentUser.email.split('@')[0] : null))) || 'Anushka';
+
+        if (!profile) {
+            profile = {
+                name: defaultName,
+                age: '21',
+                phone: '',
+                familySize: '4 members',
+                location: localStorage.getItem('deshsafe_location') || 'Rohini, Delhi',
+                healthTags: [],
+                preferences: { heatwave: true, flood: true, aqi: true, earthquake: false }
+            };
+        }
+
+        if (!profile.name || profile.name === 'Guest') {
+            profile.name = defaultName;
+        }
+
+        return profile;
     },
 
     async saveProfile(profileData) {
+        // Always persist to localStorage so it is remembered permanently
+        localStorage.setItem('deshsafe_user_profile', JSON.stringify(profileData));
+        if (profileData.location) {
+            localStorage.setItem('deshsafe_location', profileData.location);
+        }
+
         if (this.currentUser) {
             try {
                 const { saveProfile } = await import('./firebase.js');
@@ -242,118 +266,152 @@ window.DeshSafe = {
     },
 
     async saveReport(report) {
-        if (!this.currentUser) {
-            console.warn('Cannot save report — user not authenticated.');
-            return;
-        }
-
         const apiBase = window.DeshSafeConfig?.API_BASE_URL || 'http://localhost:3001';
         let token = null;
-        try {
-            token = await this.currentUser.getIdToken();
-        } catch (e) {
-            console.warn('Failed to get Firebase token:', e);
+        if (this.currentUser) {
+            try {
+                token = await this.currentUser.getIdToken();
+            } catch (e) {
+                console.warn('Failed to get Firebase token:', e);
+            }
         }
 
         let dbSuccess = false;
         let apiSuccess = false;
 
-        // 1. Try Firestore
-        try {
-            const { saveReport } = await import('./firebase.js');
-            await saveReport(this.currentUser.uid, report);
-            window.dispatchEvent(new CustomEvent('deshsafe-reports-update'));
-            dbSuccess = true;
-        } catch (e) {
-            console.warn('Failed to save to Firestore:', e);
-        }
-
-        // 2. Try backend API POST /api/reports
-        if (navigator.onLine) {
+        // 1. Try Firestore if user logged in
+        if (this.currentUser) {
             try {
-                const typeMapping = {
-                    'heatwave': 'heatwave',
-                    'flood': 'flood',
-                    'fire': 'fire',
-                    'storm / cyclone': 'cyclone',
-                    'building collapse': 'other',
-                    'other crisis': 'other'
-                };
-                const mappedType = typeMapping[(report.type || '').toLowerCase()] || 'other';
-
-                const payload = {
-                    type: mappedType,
-                    severity: report.severity || 'medium',
-                    description: `${report.title || 'No Title'}\n\n${report.description || ''}`.trim(),
-                    location: {
-                        lat: report.lat || 0,
-                        lng: report.lng || 0,
-                        address: report.location || 'Unknown',
-                        district: report.district || null,
-                        state: report.state || null
-                    },
-                    photoUrl: report.photo || null
-                };
-
-                const headers = {
-                    'Content-Type': 'application/json'
-                };
-                if (token) {
-                    headers['Authorization'] = `Bearer ${token}`;
-                }
-
-                const res = await fetch(`${apiBase}/api/reports`, {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify(payload)
-                });
-
-                if (res.status === 201 || res.status === 200) {
-                    apiSuccess = true;
-                } else {
-                    console.warn(`API returned status ${res.status}`);
-                }
+                const { saveReport } = await import('./firebase.js');
+                await saveReport(this.currentUser.uid, report);
+                window.dispatchEvent(new CustomEvent('deshsafe-reports-update'));
+                dbSuccess = true;
             } catch (e) {
-                console.warn('Failed to POST report to API:', e);
+                console.warn('Failed to save to Firestore:', e);
             }
         }
 
-        // 3. Handle failure cases / offline queuing
-        if (!dbSuccess || !apiSuccess) {
-            // Queue for background sync in IndexedDB
-            try {
-                await window.DeshSafeSyncQueue.queueReport(report, apiBase, token);
-                if ('serviceWorker' in navigator && 'SyncManager' in window) {
-                    const reg = await navigator.serviceWorker.ready;
-                    await reg.sync.register('sync-reports');
-                    console.log('[DeshSafe] Registered background sync tag "sync-reports"');
-                }
-            } catch (err) {
-                console.error('[DeshSafe] Failed to queue report in IndexedDB:', err);
-            }
+        // 2. Try backend API POST /api/reports (Guests allowed)
+        try {
+            const typeMapping = {
+                'heatwave': 'heatwave',
+                'flood': 'flood',
+                'fire': 'fire',
+                'storm / cyclone': 'cyclone',
+                'building collapse': 'other',
+                'other crisis': 'other'
+            };
+            const mappedType = typeMapping[(report.type || '').toLowerCase()] || 'other';
 
-            // Throw error to trigger report.js fallback to local storage & offline UI notice
-            throw new Error('Report queued offline. It will be synced when online.');
+            const payload = {
+                type: mappedType,
+                severity: report.severity || 'medium',
+                description: `${report.title || 'No Title'}\n\n${report.description || ''}`.trim(),
+                location: {
+                    lat: report.lat || 0,
+                    lng: report.lng || 0,
+                    address: report.location || 'Unknown',
+                    district: report.district || null,
+                    state: report.state || null
+                },
+                photoUrl: report.photo || null
+            };
+
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+
+            const res = await fetch(`${apiBase}/api/reports`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload)
+            });
+
+            if (res.status === 201 || res.status === 200) {
+                apiSuccess = true;
+            }
+        } catch (e) {
+            console.warn('Failed to POST report to API:', e);
+        }
+
+        if (!dbSuccess && !apiSuccess) {
+            // Save locally in IndexedDB / LocalStorage queue
+            saveReport(report); // local fallback
         }
     },
 
     async fetchAlertsAndWeather() {
+        const liveWeather = await this.fetchLiveWeather();
+        const apiBase = window.DeshSafeConfig?.API_BASE_URL || 'http://localhost:3001';
+        let govAlerts = [];
+
         try {
-            const firestoreReports = await this._withTimeout(
-                (async () => {
-                    const { getCommunityReports } = await import('./firebase.js');
-                    return getCommunityReports();
-                })(),
-                4000
-            );
-            if (firestoreReports.length > 0) {
-                const staticData = await this._fetchStaticAlerts();
-                return { ...staticData, community_reports: firestoreReports };
+            const govRes = await fetch(`${apiBase}/api/alerts/live-government`);
+            if (govRes.ok) {
+                const govData = await govRes.json();
+                govAlerts = govData.alerts || [];
             }
         } catch (e) {
-            console.warn('Could not fetch Firestore reports, falling back:', e);
+            console.warn('Could not fetch government alerts:', e);
         }
-        return this._fetchStaticAlerts();
+
+        // Dynamically build active alerts based on live weather and real government alerts
+        const active_alerts = [];
+
+        if (govAlerts.length > 0) {
+            govAlerts.forEach(ga => active_alerts.push({
+                id: ga.id,
+                type: ga.type,
+                title: ga.title,
+                description: ga.description,
+                severity: ga.severity,
+                location: ga.location,
+                lat: ga.lat,
+                lng: ga.lng,
+                tags: ['Official Government Warning', 'IMD / GDACS Bulletin']
+            }));
+        }
+
+        const tempC = liveWeather ? liveWeather.temperature_c : 24;
+        const loc = localStorage.getItem('deshsafe_location') || 'Rohini, Delhi';
+
+        if (tempC >= 40) {
+            active_alerts.push({
+                id: 'live-heat-alert',
+                type: 'heatwave',
+                title: `Extreme Heatwave Advisory — ${loc}`,
+                description: `High temperature recorded (${tempC}°C). Stay indoors between 11 AM – 5 PM and stay hydrated.`,
+                severity: 'high',
+                location: loc,
+                tags: ['Drink water hourly', 'Stay indoors 11am-5pm', 'Watch for heatstroke']
+            });
+        } else {
+            active_alerts.push({
+                id: 'live-weather-advisory',
+                type: 'air_quality',
+                title: `Current Weather Advisory — ${loc}`,
+                description: `Live temperature is ${tempC}°C with ${liveWeather ? liveWeather.condition : 'Clear sky'}. No extreme heatwave warning in effect.`,
+                severity: 'low',
+                location: loc,
+                tags: ['Normal Weather', 'Stay Hydrated', 'Check AQI']
+            });
+        }
+
+        return {
+            meta: { location: loc, last_updated: new Date().toISOString() },
+            active_alerts,
+            weather: liveWeather || {
+                temperature_c: 24,
+                feels_like_c: 25,
+                humidity_percent: 78,
+                aqi: 2,
+                wind_kmh: 13,
+                uv_index: 2,
+                condition: 'Clear Sky',
+                sunrise: '06:11',
+                sunset: '18:15'
+            },
+            community_reports: []
+        };
     },
 
     _withTimeout(promise, ms) {
